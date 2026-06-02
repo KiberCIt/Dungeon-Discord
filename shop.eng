@@ -1,0 +1,39 @@
+from game.inventory import Inventory
+
+
+class Shop:
+
+    def __init__(self):
+        self.items = {
+            'potion': ('Healing Potion', 50),
+            'ironsword': ('Iron Sword', 100),
+            'goldsword': ('Golden Sword', 200),
+            'crossbow': ('Crossbow', 150),
+            'staff': ('Staff', 180),
+            'bracers': ('Elemental Bracers', 200),
+            'armor': ('Armor', 120)
+        }
+
+    def show_items(self) -> str:
+        shop_list = [
+            f'/buy{key} - {name} ({price} coins)'
+            for key, (name, price) in self.items.items()
+        ]
+        return '\n'.join(['Available items:'] + shop_list)
+
+    def buy_item(self, hero, item: str) -> str:
+        """
+        Fixed version for repeated purchases
+        and item stacking in the inventory.
+        """
+        item = item.lower().replace(' ', '')
+        if item not in self.items:
+            return 'That item is not available in the shop!'
+        item_name, price = self.items[item]
+        if hero.stats.coins < price:
+            return 'Not enough coins!'
+        hero.stats.coins -= price
+        hero.inventory.add_item(item)
+        if not hero.inventory.has_item(item):
+            return 'Error while adding the item to the inventory!'
+        return f'You bought {item_name}!\nUse the /stats command!'
