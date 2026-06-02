@@ -1,0 +1,31 @@
+from enum import Enum
+
+
+class DamageType(Enum):
+    PHYSICAL = 'Physical'
+    MAGICAL = 'Magical'
+    FIRE = 'Fire'
+    FROST = 'Frost'
+    LIGHTNING = 'Lightning'
+    POISON = 'Poison'
+    BLEEDING = 'Bleeding'
+
+
+class HeroClass(Enum):
+    WARRIOR = 'Warrior'
+    ARCHER = 'Archer'
+    MAGE = 'Mage'
+
+
+class WeaponType(Enum):
+    RUSTY_SWORD = 'Rusty Sword'
+    BONE_CLUB = 'Bone Club'
+    BROKEN_SPEAR = 'Broken Spear'
+    WOODEN_SWORD = 'Wooden Sword'
+    IRON_SWORD = 'Iron Sword'
+    GOLDEN_SWORD = 'Golden Sword'
+    BOW = 'Basic Bow'
+    CROSSBOW = 'Crossbow'
+    MAGIC_WAND = 'Magic Wand'
+    STAFF = 'Staff'
+    ELEMENTAL_BRACERS = 'Elemental Bracers'
