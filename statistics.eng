@@ -1,0 +1,11 @@
+from dataclasses import dataclass, field
+from typing import List
+
+@dataclass
+class Statistics:
+    monsters_killed: int = 0
+    traps_passed: int = 0
+    experience: int = 0
+    coins: int = 0
+    level: int = 0
+    achievements: List[str] = field(default_factory=list)
