@@ -1,0 +1,101 @@
+import random
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Tuple, Any
+from game.enums import DamageType, WeaponType
+from game.effects import ActiveEffect, BleedingEffect
+
+
+@dataclass
+class Weapon:
+    type: WeaponType
+    damage: float
+    durability: int
+    damage_type: DamageType = DamageType.PHYSICAL
+    effects: Optional[List[ActiveEffect]] = None
+    crit_chance: float = 0.1
+    crit_multiplier: float = 1.5
+    effect_chance: float = 0.2
+
+    def __post_init__(self):
+        if self.effects is None:
+            self.effects = []
+            bleeding_chances = {
+                WeaponType.WOODEN_SWORD: 0.05,
+                WeaponType.IRON_SWORD: 0.15,
+                WeaponType.GOLDEN_SWORD: 0.25,
+                WeaponType.BOW: 0.7,
+                WeaponType.CROSSBOW: 0.14
+            }
+            if self.type == WeaponType.ELEMENTAL_BRACERS:
+                self.damage_type = DamageType.MAGICAL
+                self.effect_chance = 0.9
+                self.effects = [
+                    ActiveEffect(DamageType.FIRE, round(self.damage * 0.5, 1), chance=self.effect_chance),
+                    ActiveEffect(DamageType.FROST, round(self.damage * 0.3, 1), chance=self.effect_chance),
+                    ActiveEffect(DamageType.LIGHTNING, round(self.damage * 0.4, 1), chance=self.effect_chance),
+                    ActiveEffect(DamageType.POISON, round(self.damage * 0.4, 1), chance=self.effect_chance)
+                ]
+            elif self.type == WeaponType.STAFF:
+                self.damage_type = DamageType.MAGICAL
+                self.effect_chance = 0.4
+                self.effects = [
+                    ActiveEffect(DamageType.FIRE, round(self.damage * 0.4, 1), chance=self.effect_chance),
+                    ActiveEffect(DamageType.FROST, round(self.damage * 0.2, 1), chance=self.effect_chance),
+                    ActiveEffect(DamageType.LIGHTNING, round(self.damage * 0.3, 1), chance=self.effect_chance),
+                    ActiveEffect(DamageType.POISON, round(self.damage * 0.3, 1), chance=self.effect_chance)
+                ]
+            elif self.type == WeaponType.MAGIC_WAND:
+                self.damage_type = DamageType.MAGICAL
+                self.effect_chance = 0.5
+                self.effects = [
+                    ActiveEffect(DamageType.LIGHTNING, self.damage * 0.3, chance=self.effect_chance)
+                ]
+            if self.type in bleeding_chances and self.damage_type != DamageType.MAGICAL:
+                self.effects.append(
+                    BleedingEffect(
+                        self.damage * 0.3,
+                        duration=2,
+                        chance=bleeding_chances[self.type]
+                    )
+                )
+
+    def get_damage(self) -> Tuple[float, List[str], Dict[str, Any]]:
+        base_damage = self.damage
+        messages = []
+        effect_data = {
+            'stun': False,
+            'slow': False,
+            'damage_reduction': 1.0,
+            'bleeding_duration': 0
+        }
+
+        if random.random() < self.crit_chance:
+            base_damage *= self.crit_multiplier
+            messages.append('CRITICAL HIT!')
+
+        if self.effects:
+            random.shuffle(self.effects)
+            chosen_effect = random.choice(self.effects)
+            if random.random() < chosen_effect.chance:
+                effect_damage, effect_msg, is_dot, new_effect_data = chosen_effect.apply()
+                base_damage += effect_damage
+                messages.append(effect_msg)
+
+                if chosen_effect.effect_type == DamageType.BLEEDING:
+                    if effect_data['bleeding_duration'] > 0:
+                        effect_data['bleeding_duration'] += chosen_effect.duration
+                        base_damage += chosen_effect.base_damage
+                    else:
+                        effect_data['bleeding_duration'] = chosen_effect.duration
+
+                effect_data['stun'] = new_effect_data.get('stun', False)
+                effect_data['slow'] = new_effect_data.get('slow', False)
+                effect_data['damage_reduction'] = min(
+                    effect_data['damage_reduction'],
+                    new_effect_data.get('damage_reduction', 1.0)
+                )
+
+        if effect_data['bleeding_duration'] > 0:
+            messages.append('Bleeding deals damage over time (??? per turn)')
+
+        return base_damage, messages, effect_data
