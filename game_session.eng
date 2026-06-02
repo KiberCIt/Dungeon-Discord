@@ -1,0 +1,415 @@
+import random
+import sys
+import logging
+from game.monsters import Monster, Skeleton, Zombie
+from typing import List, Dict, Optional, Tuple, Any
+from game.hero import Hero
+from game.shop import Shop
+from game.dungeon import Dungeon, DungeonRoom
+from game.enums import HeroClass, DamageType
+from game.effects import ActiveEffect
+
+
+def _has_achiev(hero, key: str) -> bool:
+    """Case-insensitive achievement check."""
+    return key.lower() in (a.lower() for a in hero.stats.achievements)
+
+
+class GameSession:
+
+    def __init__(self):
+        self.hero = None
+        self.shop = Shop()
+        self.in_dungeon = False
+        self.current_dungeon = None
+        self.dungeon_types = ['ancient', 'crypt', 'mines', 'ordinary']
+
+    def start_game(self) -> str:
+        if self.hero and self.hero.alive:
+            return 'The game has already started!'
+        return "Welcome to the game! Use '/randomhero' to create a random character."
+
+    def create_random_hero(self) -> str:
+        if self.hero and self.hero.alive:
+            return 'You already have a living character!'
+        hero_class = random.choice(list(HeroClass))
+        self.hero = Hero(hero_class)
+        self.hero.active_effects = []
+        return f"""A new {hero_class.value} has been created!
+Available commands:
+/stats
+/dungeon"""
+
+    def enter_dungeon(self) -> str:
+        if not self.hero or not self.hero.alive:
+            return 'Create a living character first!\nAvailable commands:\n/randomhero'
+        if self.in_dungeon:
+            return """You are already in a dungeon!
+Available commands:
+/search - Search the room
+/next - Move to the next room
+/flee - Try to escape"""
+        dungeon_type = random.choice(self.dungeon_types)
+        dungeon_names = {
+            'ancient': 'Ancient Catacombs',
+            'crypt': 'Crypt of the Fallen Lich',
+            'mines': 'Abandoned Mines',
+            'ordinary': 'Ordinary Dungeon'
+        }
+        self.current_dungeon = Dungeon(dungeon_type)
+        self.in_dungeon = True
+        total_rooms = len(self.current_dungeon.rooms)
+        dungeon_title = f'{dungeon_names[dungeon_type]} (total rooms: {total_rooms})'
+        first_room = self.current_dungeon.rooms[0]
+        response = [f'You enter the dungeon: {dungeon_title}...', first_room.description]
+        if first_room.monster:
+            monster_type = 'Skeleton' if isinstance(first_room.monster, Skeleton) else 'Zombie'
+            response.append(f'A {monster_type} appears in the room!')
+            response.append(first_room.monster.get_taunt())
+            response.append('Available commands:')
+            response.append('/fight, /flee')
+        else:
+            response.append('\nAvailable commands: /next, /flee, /search')
+        return '\n'.join(response)
+
+    def next_room(self) -> str:
+        if not self.in_dungeon or not self.current_dungeon:
+            return 'You are not in a dungeon!'
+        self.current_dungeon.current_room += 1
+        if self.current_dungeon.current_room >= len(self.current_dungeon.rooms):
+            self.in_dungeon = False
+            self.current_dungeon = None
+            return 'You cleared the entire dungeon and escaped outside!\nAvailable commands: /dungeon'
+        next_room = self.current_dungeon.rooms[self.current_dungeon.current_room]
+        response = [
+            f'You entered room {self.current_dungeon.current_room + 1}. {next_room.description}'
+        ]
+        if next_room.monster:
+            monster_type = 'Skeleton' if isinstance(next_room.monster, Skeleton) else 'Zombie'
+            response.append(f'A {monster_type} appears in the room!')
+            response.append(next_room.monster.get_taunt())
+            response.append('Available commands: /fight, /flee')
+        else:
+            response.append('Available commands: /search, /flee, /next')
+        return '\n'.join(response)
+
+    def apply_hero_effects(self, messages: List[str], end_effects: List[str]) -> bool:
+        if not hasattr(self.hero, "active_effects"):
+            self.hero.active_effects = []
+        self.hero.is_stunned = False
+        self.hero.is_slowed = False
+        self.hero.damage_reduction = 1.0
+        remove_list = []
+
+        for eff in self.hero.active_effects:
+            if not eff.is_finished:
+                old_hp = self.hero.health
+                eff.tick(self.hero, messages, "You", end_effects)
+                dealt = max(0, old_hp - self.hero.health)
+                if eff.is_finished:
+                    remove_list.append(eff)
+
+        for eff in remove_list:
+            self.hero.active_effects.remove(eff)
+
+        if self.hero.health <= 0:
+            self.hero.alive = False
+            messages.append("You died from active effects!")
+            return True
+
+        return False
+
+    def handle_combat(self, monster: Monster) -> Tuple[bool, str]:
+        messages = []
+        end_effects = []
+
+        if monster.health <= 0:
+            return True, "The monster is already dead! Available commands: /next, /search"
+
+        hero_effect_damage = 0.0
+        if not hasattr(self.hero, "active_effects"):
+            self.hero.active_effects = []
+        self.hero.is_stunned = False
+        self.hero.is_slowed = False
+        self.hero.damage_reduction = 1.0
+        hero_remove = []
+        for eff in self.hero.active_effects:
+            if not eff.is_finished:
+                old_hp = self.hero.health
+                eff.tick(self.hero, messages, "You", end_effects)
+                hero_effect_damage += max(0, old_hp - self.hero.health)
+                if eff.is_finished:
+                    hero_remove.append(eff)
+        for eff in hero_remove:
+            self.hero.active_effects.remove(eff)
+        if hero_effect_damage > 0:
+            messages.append(f"Active effects dealt {hero_effect_damage:.1f} damage to you!")
+        if end_effects:
+            messages.append("\n".join(end_effects))
+            end_effects.clear()
+        if self.hero.health <= 0:
+            self.hero.alive = False
+            return False, "\n".join(messages + ["You died from active effects!"])
+
+        monster_effect_damage = monster.apply_effect_damage(messages, end_effects)
+        if monster_effect_damage > 0:
+            messages.append(f"Active effects dealt {monster_effect_damage:.1f} damage to the monster!")
+        if end_effects:
+            messages.append("\n".join(end_effects))
+            end_effects.clear()
+        if monster.health <= 0:
+            messages.append("The monster died from active effects!")
+            return True, "\n".join(messages + ["Available commands: /next, /search"])
+
+        if self.hero.is_stunned:
+            messages.append("You are stunned and skip your attack!")
+        else:
+            guaranteed_hit = monster.is_stunned and (random.random() > 0.1)
+
+            initial_damage, hero_msg, effect_data, hero_missed = self.hero.attack()
+            messages.extend(hero_msg.split('\n'))
+
+            if effect_data.get("stun"):
+                stun_effect = ActiveEffect(
+                    effect_type=DamageType.LIGHTNING,
+                    base_damage=0,
+                    duration=1,
+                    stun=True
+                )
+                monster.apply_effect(stun_effect)
+                monster.is_stunned = True
+
+            if effect_data.get("slow"):
+                slow_effect = ActiveEffect(
+                    effect_type=DamageType.FROST,
+                    base_damage=0,
+                    duration=1,
+                    slow=True,
+                    damage_reduction=0.7
+                )
+                monster.apply_effect(slow_effect)
+
+            if guaranteed_hit and hero_missed:
+                hero_missed = False
+                messages.append(random.choice([
+                    "You missed... The monster can hardly believe its luck!",
+                    "Time slowed down, you aimed carefully... and still missed!",
+                    "A dark voice whispers: 'Your fate is written in blood... and somehow you still missed.'"
+                ]))
+                if not _has_achiev(self.hero, "master_miss"):
+                    self.hero.stats.achievements.append("master_miss")
+                    messages.append("You earned the achievement: master_miss!\n/stats")
+
+            if not hero_missed:
+                final_damage = max(0, initial_damage - monster.armor)
+                monster.health = max(0, round(monster.health - final_damage, 1))
+                messages.append(f"You deal {final_damage:.1f} damage to the monster! (Monster Armor: {monster.armor})")
+                messages.append(f"Monster Health: {monster.health}")
+
+            if monster.health <= 0:
+                reward_coins = random.randint(30, 50)
+                self.hero.stats.coins += reward_coins
+                self.hero.stats.monsters_killed += 1
+
+                base_exp = 9 if isinstance(monster, Zombie) else 10
+                weapon_exp = monster.weapon.damage if monster.weapon else 5
+                total_exp = base_exp + weapon_exp
+                self.hero.stats.experience += total_exp
+
+                level_up_message = ""
+                if self.hero.stats.experience >= 100:
+                    self.hero.stats.level += 1
+                    self.hero.stats.experience -= 100
+                    level_up_message = f"Level up! Your level is now: {self.hero.stats.level}"
+
+                if self.hero.stats.monsters_killed >= 3 and "monster_slayer" not in self.hero.stats.achievements:
+                    self.hero.stats.achievements.append("monster_slayer")
+                    self.hero.inventory.add_item("Bone_Amulet")
+                    messages.append("You earned the achievement: monster_slayer! /stats")
+
+                return True, "\n".join(messages + [
+                    "Monster defeated!",
+                    f"Experience gained: {total_exp}",
+                    f"Coins gained: {reward_coins}",
+                    level_up_message,
+                    f"Your Health: {self.hero.health}/{self.hero.max_health} HP",
+                    "Available commands: /next, /search"
+                ])
+
+        if monster.is_stunned:
+            messages.append("The monster is stunned and skips its attack!")
+        else:
+            monster_attack_missed = random.random() < 0.25
+            if hero_missed and monster_attack_missed:
+                messages.append(random.choice([
+                    "Two legendary missers!",
+                    "A drunken brawl? Both attacks missed!",
+                    "What a circus! Both of you hit nothing but air.",
+                    "Congratulations, masters of failure! Zero hits landed."
+                ]))
+            elif monster_attack_missed:
+                messages.append("The monster missed!")
+            else:
+                monster_damage = max(0, (monster.weapon.damage * monster.damage_reduction) - self.hero.armor)
+                self.hero.health = max(0, round(self.hero.health - monster_damage, 1))
+                messages.append(f"The monster attacks and deals {monster_damage:.1f} damage!")
+
+                if self.hero.health <= 0:
+                    self.hero.alive = False
+                    self.in_dungeon = False
+                    self.current_dungeon = None
+                    messages.append("You died! Use '/randomhero'.")
+                    return False, "\n".join(messages)
+
+        return False, "\n".join(messages + [
+            f"Your Health: {self.hero.health}/{self.hero.max_health} HP",
+            "Available commands: /fight, /flee"
+        ])
+
+    def handle_command(self, command: str, *args: str) -> str:
+        """Processes a command and calls the corresponding method."""
+        command = command.strip().lower()
+        if command == 'randomhero':
+            return self.create_random_hero()
+        elif command == 'dungeon':
+            return self.enter_dungeon()
+        elif command == 'fight':
+            if not self.in_dungeon or not self.current_dungeon:
+                return 'You are not in a dungeon!\nAvailable commands: /dungeon'
+            room = self.current_dungeon.rooms[self.current_dungeon.current_room]
+            if not room.monster:
+                return """There are no monsters in this room!
+Available commands:
+/search - Search the room
+/next - Move to the next room
+/flee - Try to escape"""
+            return self.handle_combat(room.monster)[1]
+        elif command == 'flee':
+            if not self.in_dungeon or not self.current_dungeon:
+                return 'You are not in a dungeon!\nAvailable commands:\n/dungeon'
+
+            flee_chance = 0.3
+
+            if random.random() < flee_chance:
+                self.hero.failed_escapes = 0
+
+                if self.current_dungeon.current_room > 0:
+                    self.current_dungeon.current_room -= 1
+                    current_room = self.current_dungeon.rooms[self.current_dungeon.current_room]
+                    return f"""You managed to escape to the previous room!
+{current_room.description}
+Available commands:
+/search - Search the room
+/next - Move forward
+/flee - Try to escape again"""
+                else:
+                    self.in_dungeon = False
+                    self.current_dungeon = None
+                    return (
+                        'You panic and run out of the dungeon!\n'
+                        'Available commands:\n'
+                        '/dungeon'
+                    )
+
+            damage = random.randint(3, 8)
+            self.hero.health -= damage
+            self.hero.failed_escapes += 1
+
+            escape_message = (
+                f"Escape failed! You tripped over a stone and took {damage} damage.\n"
+            )
+
+            achievement_message = ""
+
+            if self.hero.failed_escapes == 5:
+                if not _has_achiev(self.hero, "Stone_I"):
+                    achievement_message = (
+                        "Congratulations, you earned the achievement [Stone_I]! - /Stone_I\n"
+                        "You have tripped over the same cursed stone 5 times in a row while escaping!"
+                    )
+                    self.hero.stats.achievements.append("Stone_I")
+
+            elif self.hero.failed_escapes == 6:
+                if not _has_achiev(self.hero, "Stone_II"):
+                    achievement_message = (
+                        "Congratulations, you earned the achievement [Stone_II]! - /Stone_II\n"
+                        "You slammed into the same stone 6 times in a row! Truly impressive persistence!"
+                    )
+                    self.hero.stats.achievements.append("Stone_II")
+
+            elif self.hero.failed_escapes == 7:
+                if not _has_achiev(self.hero, "Stone_III"):
+                    achievement_message = (
+                        "You are still alive?! Then congratulations, you earned the achievement [Stone_III]! - /Stone_III\n"
+                        "You received a scar and a stone as a reminder of this day!"
+                    )
+                    self.hero.stats.achievements.append("Stone_III")
+                    self.hero.inventory.add_item("stone")
+
+            if self.hero.health <= 0:
+                self.hero.alive = False
+                return "You died while trying to flee! The cursed stone finished you off...\n/randomhero"
+
+            return (
+                f"{escape_message}{achievement_message}\n"
+                "/next - Fine, I give up, I'll move on\n"
+                "/flee - Try to escape again"
+            )
+
+        elif command == 'next':
+            if not self.in_dungeon or not self.current_dungeon:
+                return 'You are not in a dungeon!'
+            self.current_dungeon.current_room += 1
+            if self.current_dungeon.current_room >= len(self.current_dungeon.rooms):
+                self.in_dungeon = False
+                self.current_dungeon = None
+                return 'You cleared the dungeon and escaped outside, player!\nAn unknown voice whispers: return... /dungeon'
+            next_room = self.current_dungeon.rooms[self.current_dungeon.current_room]
+            response = [
+                f'You entered room {self.current_dungeon.current_room + 1}. {next_room.description}'
+            ]
+            if next_room.monster:
+                monster_type = 'Skeleton' if isinstance(next_room.monster, Skeleton) else 'Zombie'
+                response.append(f'A {monster_type} appears in the room!')
+                response.append(next_room.monster.get_taunt())
+                response.append('Available commands: /fight, /flee')
+            else:
+                response.append('Available commands: /search, /flee, /next')
+            return '\n'.join(response)
+
+        elif command == 'search':
+            if not self.in_dungeon or not self.current_dungeon:
+                return 'You are not in a dungeon!'
+            room = self.current_dungeon.rooms[self.current_dungeon.current_room]
+            return room.search_room(self.hero)
+
+        elif command.startswith('/buy'):
+            if not self.hero:
+                return 'Create a character first!'
+            item_key = command[4:].strip()
+            return self.shop.buy_item(self.hero, item_key)
+
+        elif command.startswith('/use'):
+            if not self.hero or not self.hero.alive:
+                return 'You do not have a living character!\nAvailable commands:\n/randomhero'
+            item_key = command[4:].strip()
+            return self.hero.use_item(item_key)
+
+        elif command.startswith('/'):
+            ach_name_raw = command[1:]
+            for ach in self.hero.stats.achievements:
+                if ach.lower() == ach_name_raw.lower():
+                    return self.get_achievement_description(ach)
+            return 'There is no detailed information about this achievement, or you have not unlocked it yet!'
+
+    def get_achievement_description(self, ach_name: str) -> str:
+        descriptions = {
+            "counter_attack": "You did not retreat when the enemy counterattacked — you just accidentally dropped your weapon on your own foot several times... But you survived, so you are a hero!",
+            "great_missers": "You and your enemy missed at the same time, and now bards sing ballads about your glorious dance of empty space on the battlefield.",
+            "monster_slayer": "After destroying 10 monsters, you earned the title: 'Wait... can he actually fight?'",
+            "Stone_I": "Again and again you stumbled over the cursed stone, and it seems to have grown strangely attached to you!",
+            "Stone_II": "Falling over the same stone six times — the legend continues!",
+            "Stone_III": "A seventh time?! That is true persistence... Now you carry a scar to remember it!",
+            "master_miss": "You had almost a 100% chance to hit and still missed! Eternal glory to you!"
+        }
+        return descriptions.get(ach_name, "This achievement does not have a detailed description... yet!")
