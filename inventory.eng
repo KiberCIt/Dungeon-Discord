@@ -1,0 +1,36 @@
+from typing import List, Dict, Optional, Tuple, Any
+
+
+class Inventory:
+
+    def __init__(self):
+        self.items: Dict[str, int] = {}
+
+    def add_item(self, item: str, count: int = 1) -> None:
+        """Adds an item to the inventory, formatted as a /use command."""
+        formatted_item = f"/use{item.lower().replace(' ', '')}"
+        if formatted_item in self.items:
+            self.items[formatted_item] += count
+        else:
+            self.items[formatted_item] = count
+
+    def remove_item(self, item: str, count: int = 1) -> bool:
+        """Removes an item from the inventory if enough of it exists."""
+        formatted_item = f"/use{item.lower().replace(' ', '')}"
+        if formatted_item not in self.items or self.items[formatted_item] < count:
+            return False
+        self.items[formatted_item] -= count
+        if self.items[formatted_item] <= 0:
+            del self.items[formatted_item]
+        return True
+
+    def has_item(self, item: str) -> bool:
+        """Checks whether the inventory contains the item."""
+        formatted_item = f"/use{item.lower().replace(' ', '')}"
+        return formatted_item in self.items
+
+    def get_items_list(self) -> str:
+        """Returns the list of items in the inventory."""
+        if not self.items:
+            return 'Inventory is empty'
+        return '\n'.join([f'{item}: {count}' for item, count in self.items.items()])
