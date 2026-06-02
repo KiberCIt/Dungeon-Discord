@@ -1,0 +1,103 @@
+from typing import List, Dict, Optional, Tuple, Any
+from game.enums import DamageType, WeaponType
+from game.effects import ActiveEffect
+from abc import ABC, abstractmethod
+from game.weapons import Weapon
+import random
+
+
+class Monster(ABC):
+    def __init__(self, weapon: Optional[Weapon] = None):
+        self.health = random.randint(30, 40)
+        self.weapon = weapon
+        self.armor = 1 if (weapon and weapon.type == WeaponType.GOLDEN_SWORD) else 0
+
+        self.active_effects: List[ActiveEffect] = []
+
+        self.is_stunned = False
+        self.damage_reduction = 1.0
+
+    def apply_effect(self, new_effect: ActiveEffect) -> None:
+        """
+        Applies an effect to the monster.
+        If it is poison or bleeding and the effect already exists,
+        stack_up() is used instead of duplicating it.
+        """
+        if new_effect.effect_type in (DamageType.POISON, DamageType.BLEEDING):
+            for eff in self.active_effects:
+                if eff.effect_type == new_effect.effect_type:
+                    eff.stack_up()
+                    return
+
+        self.active_effects.append(new_effect)
+
+    def apply_effect_damage(self, messages: List[str], end_effects: List[str]) -> float:
+        total_damage = 0.0
+        remove_list = []
+
+        self.is_stunned = False
+        self.is_slowed = False
+        self.damage_reduction = 1.0
+
+        for eff in self.active_effects:
+            if not eff.is_finished:
+                old_hp = self.health
+                eff.tick(self, messages, owner_name="Monster", end_effects=end_effects)
+                damage_this_tick = max(0, old_hp - self.health)
+                total_damage += damage_this_tick
+
+                if eff.is_finished:
+                    remove_list.append(eff)
+
+        for eff in remove_list:
+            self.active_effects.remove(eff)
+
+        if self.is_slowed:
+            self.damage_reduction *= 0.7
+
+        return total_damage
+
+    @abstractmethod
+    def get_taunt(self) -> str:
+        pass
+
+
+class Skeleton(Monster):
+    def __init__(self):
+        self.battle_phrases = [
+            "Your bones will join my collection!",
+            "For the darkness! Weaklings like you are easy prey!",
+            "This dungeon will become your grave!"
+        ]
+        weapon = self._select_random_weapon()
+        super().__init__(weapon)
+
+    def _select_random_weapon(self) -> Optional[Weapon]:
+        weapons = [
+            (WeaponType.WOODEN_SWORD, 2, 20, 0.5),
+            (WeaponType.IRON_SWORD, 10.5, 47, 0.35),
+            (WeaponType.GOLDEN_SWORD, 11, 34, 0.15)
+        ]
+        choice_data = random.choices(weapons, weights=[w[3] for w in weapons])[0]
+        return Weapon(choice_data[0], choice_data[1], choice_data[2])
+
+    def get_taunt(self) -> str:
+        return random.choice(self.battle_phrases)
+
+
+class Zombie(Monster):
+    def __init__(self):
+        weapon = self._select_random_weapon()
+        super().__init__(weapon)
+
+    def _select_random_weapon(self) -> Optional[Weapon]:
+        weapons = [
+            (WeaponType.WOODEN_SWORD, 2, 20, 0.5),
+            (WeaponType.IRON_SWORD, 10.5, 47, 0.35),
+            (WeaponType.GOLDEN_SWORD, 11, 34, 0.15)
+        ]
+        choice_data = random.choices(weapons, weights=[w[3] for w in weapons])[0]
+        return Weapon(choice_data[0], choice_data[1], choice_data[2])
+
+    def get_taunt(self) -> str:
+        return "Braaaains..."
