@@ -1,0 +1,166 @@
+import random
+import sys
+from typing import List, Dict, Optional, Tuple, Any
+from game.weapons import Weapon
+from game.inventory import Inventory
+from game.enums import HeroClass, DamageType, WeaponType
+from game.statistics import Statistics
+from game.effects import ActiveEffect, BleedingEffect
+
+
+class Hero:
+    def __init__(self, hero_class: HeroClass):
+        self.hero_class = hero_class
+        self.alive = True
+        self.failed_escapes = 0
+        self.stats = Statistics(coins=1000)
+        self.inventory = Inventory()
+        self.coin_bonus = random.randint(1, 3)
+        self.health = 100 if hero_class == HeroClass.WARRIOR else 90
+        self.max_health = self.health
+        self.armor = 1 if hero_class == HeroClass.WARRIOR else 0
+        self.weapon = self._get_starting_weapon()
+        self.active_effects: List[ActiveEffect] = []
+        self.missed_count = 0
+
+    def _get_starting_weapon(self) -> Weapon:
+        if self.hero_class == HeroClass.WARRIOR:
+            return Weapon(WeaponType.WOODEN_SWORD, damage=2, durability=20)
+        elif self.hero_class == HeroClass.ARCHER:
+            return Weapon(WeaponType.BOW, damage=3, durability=30)
+        else:
+            return Weapon(WeaponType.MAGIC_WAND, damage=4, durability=21)
+
+    def attack(self) -> Tuple[float, str, Dict[str, Any], bool]:
+        try:
+            messages = []
+
+            if random.random() < 0.25:
+                return 0, 'Miss!', {}, True
+
+            damage, effect_messages, effect_data = self.weapon.get_damage()
+
+            is_critical = random.random() < 0.2
+            if is_critical:
+                damage *= 1.5
+                messages.append("Critical hit!")
+
+            messages.extend(effect_messages)
+
+            return damage, '\n'.join(messages), effect_data, False
+
+        except Exception as e:
+            return 0, f"Attack error: {e}", {}, True
+
+    def use_item(self, item: str) -> str:
+        item_key = item.lower().replace(' ', '')
+        if not self.inventory.has_item(item_key):
+            return 'You do not have that item in your inventory!'
+
+        if item_key == 'potion':
+            if not self.inventory.remove_item(item_key):
+                return 'You do not have that item!'
+
+            negative_effects = []
+            remove_list = []
+
+            for eff in self.active_effects:
+                if eff.effect_type in (
+                    DamageType.POISON, DamageType.BLEEDING,
+                    DamageType.FIRE, DamageType.FROST, DamageType.LIGHTNING
+                ):
+                    negative_effects.append(eff.effect_type.value)
+                    remove_list.append(eff)
+
+            for eff in remove_list:
+                self.active_effects.remove(eff)
+
+            if self.health >= self.max_health:
+                if not negative_effects:
+                    return """You were already at full health and had no debuffs...
+But you drank the potion anyway and wasted it!"""
+                else:
+                    neg_list = ', '.join(negative_effects)
+                    return f"""Your health was already full, but the potion removed these effects: {neg_list}.
+Potion used!"""
+            else:
+                old_health = self.health
+                heal_amount = 50
+                self.health = min(self.max_health, self.health + heal_amount)
+                actual_heal = self.health - old_health
+                if negative_effects:
+                    neg_list = ', '.join(negative_effects)
+                    return f"""You drank a healing potion! +{actual_heal} HP restored.
+Removed effects: {neg_list}."""
+                else:
+                    return f'You drank a healing potion! Restored {actual_heal} health.'
+
+        elif item_key == 'armor':
+            self.armor += 1
+            self.inventory.remove_item(item_key)
+            return 'You equipped armor!'
+
+        weapon_stats = {
+            'ironsword': (WeaponType.IRON_SWORD, 10.5, 47),
+            'goldsword': (WeaponType.GOLDEN_SWORD, 11, 34),
+            'crossbow': (WeaponType.CROSSBOW, 10, 51),
+            'staff': (WeaponType.STAFF, 6, 50),
+            'bracers': (WeaponType.ELEMENTAL_BRACERS, 8, 40),
+            'magicwand': (WeaponType.MAGIC_WAND, 4, 30),
+            'bow': (WeaponType.BOW, 3, 30),
+            'woodensword': (WeaponType.WOODEN_SWORD, 2, 20),
+        }
+
+        if item_key in weapon_stats:
+            weapon_type, damage, durability = weapon_stats[item_key]
+            if self.weapon:
+                old_weapon_name = self.weapon.type.name.lower().replace(' ', '')
+                self.inventory.add_item(old_weapon_name)
+            self.weapon = Weapon(weapon_type, damage, durability)
+            self.inventory.remove_item(item_key)
+            return f'You equipped {self.weapon.type.value}!'
+
+        return 'This item cannot be used!'
+
+    def get_stats(self) -> str:
+        damage_type_display = (
+            'Magical' if self.weapon.damage_type == DamageType.MAGICAL
+            else 'Physical'
+        )
+        stats = [
+            f'Class: {self.hero_class.value}',
+            f'Health: {self.health}/{self.max_health}',
+            f'Weapon: {self.weapon.type.value} (damage: {self.weapon.damage})',
+            f'Damage Type: {damage_type_display}',
+            f'Armor: {self.armor}',
+            f'Level: {self.stats.level} (Experience: {self.stats.experience}/100)',
+            f'Coins: {self.stats.coins} (Bonus: +{self.coin_bonus})',
+            f'Monsters Killed: {self.stats.monsters_killed}',
+            f'Traps Passed: {self.stats.traps_passed}'
+        ]
+
+        if self.stats.achievements:
+            stats.append('\nAchievements:')
+            for achievement in self.stats.achievements:
+                stats.append(
+                    f"- {achievement} (/{achievement.lower().replace(' ', '_')} - detailed info)"
+                )
+
+        if self.active_effects:
+            stats.append('\nActive Effects:')
+            for eff in self.active_effects:
+                effects_list = []
+                effects_list.append(f"{eff.effect_type.value}")
+
+                if eff.stun:
+                    effects_list.append("stun")
+                if eff.slow:
+                    effects_list.append("slow (-30% damage)")
+                if eff.effect_type in (DamageType.FIRE, DamageType.POISON, DamageType.BLEEDING):
+                    effects_list.append("damage over time")
+
+                effects_summary = ", ".join(effects_list)
+                stats.append(f"- {effects_summary} (turns remaining: {eff.duration})")
+
+        stats.extend(['\nInventory:', self.inventory.get_items_list()])
+        return '\n'.join(stats)
