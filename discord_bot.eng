@@ -1,9 +1,7 @@
 import os
+import re
 import logging
-import discord
-from discord.ext import commands
-import os
-import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -12,7 +10,7 @@ from game.game_session import GameSession
 
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
@@ -29,10 +27,10 @@ if not GUILD_ID:
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
+bot = commands.Bot(command_prefix="/", intents=intents, help_command=None)
 
 shared_game = None
-command_mentions = {}
+command_mentions: dict[str, str] = {}
 
 
 def get_game() -> GameSession:
@@ -42,63 +40,69 @@ def get_game() -> GameSession:
     return shared_game
 
 
-def build_plain_help() -> str:
-    commands_map = {
-        'start': 'Start the game',
-        'help': 'Show the help menu',
-        'randomhero': 'Create a random hero',
-        'stats': 'Show hero stats',
-        'dungeon': 'Enter the dungeon',
-        'fight': 'Fight the monster',
-        'flee': 'Try to escape',
-        'next': 'Move to the next room',
-        'search': 'Search the current room',
-        'shop': 'Open the shop',
-        'buy': 'Buy an item',
-        'use': 'Use an item',
-        'achievement_i': 'Show achievement I',
-        'achievement_ii': 'Show achievement II',
-        'achievement_iii': 'Show achievement III',
-    }
+def get_command_display(name: str) -> str:
+    return command_mentions.get(name, f"/{name}")
 
-    lines = []
-    for cmd, desc in commands_map.items():
-        mention = command_mentions.get(cmd, f'/{cmd}')
-        if cmd == 'buy':
-            lines.append(f'{mention} - {desc}, example: /buy item: potion')
-        elif cmd == 'use':
-            lines.append(f'{mention} - {desc}, example: /use item: potion')
-        else:
-            lines.append(f'{mention} - {desc}')
-    return '\n'.join(lines)
+
+def build_plain_help() -> str:
+    return (
+        "**Available commands:**\n"
+        f"{get_command_display('start')} — Start the game\n"
+        f"{get_command_display('help')} — Show the help menu\n"
+        f"{get_command_display('randomhero')} — Create a random hero\n"
+        f"{get_command_display('stats')} — Show hero stats\n"
+        f"{get_command_display('dungeon')} — Enter the dungeon\n"
+        f"{get_command_display('fight')} — Fight the monster\n"
+        f"{get_command_display('flee')} — Try to escape\n"
+        f"{get_command_display('next')} — Move to the next room\n"
+        f"{get_command_display('search')} — Search the current room\n"
+        f"{get_command_display('shop')} — Open the shop\n"
+        f"{get_command_display('buy')} — Buy an item, example: /buy item: potion\n"
+        f"{get_command_display('use')} — Use an item, example: /use item: potion\n"
+        f"{get_command_display('achievement_i')} — Show achievement I\n"
+        f"{get_command_display('achievement_ii')} — Show achievement II\n"
+        f"{get_command_display('achievement_iii')} — Show achievement III"
+    )
 
 
 def replace_commands_with_mentions(text: str) -> str:
-    replacements = {
-        '/start': command_mentions.get('start', '/start'),
-        '/help': command_mentions.get('help', '/help'),
-        '/randomhero': command_mentions.get('randomhero', '/randomhero'),
-        '/stats': command_mentions.get('stats', '/stats'),
-        '/dungeon': command_mentions.get('dungeon', '/dungeon'),
-        '/fight': command_mentions.get('fight', '/fight'),
-        '/flee': command_mentions.get('flee', '/flee'),
-        '/next': command_mentions.get('next', '/next'),
-        '/search': command_mentions.get('search', '/search'),
-        '/shop': command_mentions.get('shop', '/shop'),
-        '/buy': command_mentions.get('buy', '/buy'),
-        '/use': command_mentions.get('use', '/use'),
-        '/achievement_i': command_mentions.get('achievement_i', '/achievement_i'),
-        '/achievement_ii': command_mentions.get('achievement_ii', '/achievement_ii'),
-        '/achievement_iii': command_mentions.get('achievement_iii', '/achievement_iii'),
-        '/Stone_I': command_mentions.get('achievement_i', '/achievement_i'),
-        '/Stone_II': command_mentions.get('achievement_ii', '/achievement_ii'),
-        '/Stone_III': command_mentions.get('achievement_iii', '/achievement_iii'),
+    if not text or not command_mentions:
+        return text
+
+    alias_map = {
+        "start": "start",
+        "help": "help",
+        "randomhero": "randomhero",
+        "stats": "stats",
+        "dungeon": "dungeon",
+        "fight": "fight",
+        "flee": "flee",
+        "next": "next",
+        "search": "search",
+        "shop": "shop",
+        "buy": "buy",
+        "use": "use",
+        "achievement_i": "achievement_i",
+        "achievement_ii": "achievement_ii",
+        "achievement_iii": "achievement_iii",
+        "stone_i": "achievement_i",
+        "stone_ii": "achievement_ii",
+        "stone_iii": "achievement_iii",
     }
 
-    for plain, mention in sorted(replacements.items(), key=lambda x: len(x[0]), reverse=True):
-        text = text.replace(plain, mention)
+    pattern = re.compile(
+        r'(?<!<)/(' + '|'.join(sorted(map(re.escape, alias_map.keys()), key=len, reverse=True)) + r')\b',
+        flags=re.IGNORECASE,
+    )
 
-    return text
+    def repl(match: re.Match) -> str:
+        raw = match.group(1)
+        key = alias_map.get(raw.lower())
+        if not key:
+            return match.group(0)
+        return command_mentions.get(key, f"/{raw}")
+
+    return pattern.sub(repl, text)
 
 
 def normalize_response(text: str) -> str:
@@ -265,7 +269,7 @@ async def buy_command(interaction: discord.Interaction, item: str):
     await run_game_command(interaction, "buy", item)
 
 
-@bot.tree.command(name="use", description="Use an item")
+@bot.tree.command(name="use", description="Use an item from your inventory")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.describe(item="Item name")
 @app_commands.autocomplete(item=use_autocomplete)
@@ -291,47 +295,10 @@ async def achievement_iii_command(interaction: discord.Interaction):
     await run_game_command(interaction, "achievement_iii")
 
 
-bot.run(TOKEN)@app_commands.autocomplete(item=buy_autocomplete)
-async def buy_command(interaction: discord.Interaction, item: str):
-    game = get_game()
-    response = game.handle_command("buy", item.split())
-    await send_game_response(interaction, response)
-
-
-@bot.tree.command(name="use", description="Use an item from your inventory")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
-@app_commands.describe(item="Item name")
-@app_commands.autocomplete(item=use_autocomplete)
-async def use_command(interaction: discord.Interaction, item: str):
-    game = get_game()
-    response = game.handle_command("use", item.split())
-    await send_game_response(interaction, response)
-
-
-@bot.tree.command(name="achievement_i", description="Show achievement I")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
-async def achievement_i_command(interaction: discord.Interaction):
-    game = get_game()
-    response = game.handle_command("achievement_i", [])
-    await send_game_response(interaction, response)
-
-
-@bot.tree.command(name="achievement_ii", description="Show achievement II")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
-async def achievement_ii_command(interaction: discord.Interaction):
-    game = get_game()
-    response = game.handle_command("achievement_ii", [])
-    await send_game_response(interaction, response)
-
-
-@bot.tree.command(name="achievement_iii", description="Show achievement III")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
-async def achievement_iii_command(interaction: discord.Interaction):
-    game = get_game()
-    response = game.handle_command("achievement_iii", [])
-    await send_game_response(interaction, response)
-
-
-bot.run(TOKEN)
+if __name__ == "__main__":
+    try:
+        bot.run(TOKEN)
+    except KeyboardInterrupt:
+        logger.info("Bot stopped manually.")
 
 
