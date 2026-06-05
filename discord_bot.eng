@@ -2,7 +2,14 @@ import os
 import logging
 import discord
 from discord.ext import commands
+import os
+import logging
+import discord
+from discord import app_commands
+from discord.ext import commands
+
 from game.game_session import GameSession
+
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -10,34 +17,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv('DISCORD_BOT_TOKEN', 'PUT_YOUR_DISCORD_BOT_TOKEN_HERE')
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0"))
 
+if not TOKEN:
+    raise ValueError("DISCORD_BOT_TOKEN is not set.")
 
-def print_help() -> str:
-    commands_map = {
-        '/start': 'Start the game',
-        '/help': 'Show the help menu',
-        '/randomhero': 'Create a random hero',
-        '/stats': 'Show hero stats',
-        '/dungeon': 'Enter the dungeon',
-        '/fight': 'Fight the monster',
-        '/flee': 'Try to escape',
-        '/next': 'Move to the next room',
-        '/search': 'Search the current room',
-        '/shop': 'Open the shop',
-        '/buy <item>': 'Buy an item, for example /buy iron sword',
-        '/use <item>': 'Use an item, for example /use healing potion',
-        '/achievement_i': 'Show achievement I',
-        '/achievement_ii': 'Show achievement II',
-        '/achievement_iii': 'Show achievement III',
-    }
-    return '\n'.join(f'{cmd:18} - {desc}' for cmd, desc in commands_map.items())
-
+if not GUILD_ID:
+    raise ValueError("DISCORD_GUILD_ID is not set.")
 
 intents = discord.Intents.default()
 intents.message_content = True
+
 bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
+
 shared_game = None
+command_mentions = {}
 
 
 def get_game() -> GameSession:
@@ -47,149 +42,296 @@ def get_game() -> GameSession:
     return shared_game
 
 
-@bot.event
-async def on_ready():
-    logger.info('Logged in as %s (%s)', bot.user, bot.user.id)
+def build_plain_help() -> str:
+    commands_map = {
+        'start': 'Start the game',
+        'help': 'Show the help menu',
+        'randomhero': 'Create a random hero',
+        'stats': 'Show hero stats',
+        'dungeon': 'Enter the dungeon',
+        'fight': 'Fight the monster',
+        'flee': 'Try to escape',
+        'next': 'Move to the next room',
+        'search': 'Search the current room',
+        'shop': 'Open the shop',
+        'buy': 'Buy an item',
+        'use': 'Use an item',
+        'achievement_i': 'Show achievement I',
+        'achievement_ii': 'Show achievement II',
+        'achievement_iii': 'Show achievement III',
+    }
+
+    lines = []
+    for cmd, desc in commands_map.items():
+        mention = command_mentions.get(cmd, f'/{cmd}')
+        if cmd == 'buy':
+            lines.append(f'{mention} - {desc}, example: /buy item: potion')
+        elif cmd == 'use':
+            lines.append(f'{mention} - {desc}, example: /use item: potion')
+        else:
+            lines.append(f'{mention} - {desc}')
+    return '\n'.join(lines)
 
 
-@bot.command(name='start')
-async def start(ctx: commands.Context):
-    global shared_game
-    shared_game = GameSession()
-    await ctx.send('Welcome to the game! Use /help for the command list.')
+def replace_commands_with_mentions(text: str) -> str:
+    replacements = {
+        '/start': command_mentions.get('start', '/start'),
+        '/help': command_mentions.get('help', '/help'),
+        '/randomhero': command_mentions.get('randomhero', '/randomhero'),
+        '/stats': command_mentions.get('stats', '/stats'),
+        '/dungeon': command_mentions.get('dungeon', '/dungeon'),
+        '/fight': command_mentions.get('fight', '/fight'),
+        '/flee': command_mentions.get('flee', '/flee'),
+        '/next': command_mentions.get('next', '/next'),
+        '/search': command_mentions.get('search', '/search'),
+        '/shop': command_mentions.get('shop', '/shop'),
+        '/buy': command_mentions.get('buy', '/buy'),
+        '/use': command_mentions.get('use', '/use'),
+        '/achievement_i': command_mentions.get('achievement_i', '/achievement_i'),
+        '/achievement_ii': command_mentions.get('achievement_ii', '/achievement_ii'),
+        '/achievement_iii': command_mentions.get('achievement_iii', '/achievement_iii'),
+        '/Stone_I': command_mentions.get('achievement_i', '/achievement_i'),
+        '/Stone_II': command_mentions.get('achievement_ii', '/achievement_ii'),
+        '/Stone_III': command_mentions.get('achievement_iii', '/achievement_iii'),
+    }
+
+    for plain, mention in sorted(replacements.items(), key=lambda x: len(x[0]), reverse=True):
+        text = text.replace(plain, mention)
+
+    return text
 
 
-@bot.command(name='help')
-async def help_command(ctx: commands.Context):
-    await ctx.send(f'```\n{print_help()}\n```')
+def normalize_response(text: str) -> str:
+    if text is None:
+        return "No response from the game."
+
+    text = str(text).strip()
+    if not text:
+        return "No response from the game."
+
+    return replace_commands_with_mentions(text)
 
 
-@bot.command(name='randomhero')
-async def randomhero(ctx: commands.Context):
-    game = get_game()
-    response = game.handle_command('randomhero')
-    await ctx.send(response)
-
-
-@bot.command(name='stats')
-async def stats(ctx: commands.Context):
-    game = get_game()
-    if not getattr(game, 'hero', None):
-        await ctx.send('Start the game first with /start and create a hero with /randomhero.')
-        return
-    if hasattr(game.hero, 'get_stats'):
-        response = game.hero.get_stats()
+async def safe_send(interaction: discord.Interaction, content: str):
+    content = normalize_response(content)
+    if interaction.response.is_done():
+        await interaction.followup.send(content)
     else:
-        response = game.handle_command('stats')
-    await ctx.send(response)
+        await interaction.response.send_message(content)
 
 
-@bot.command(name='shop')
-async def shop(ctx: commands.Context):
-    game = get_game()
-    if hasattr(game, 'shop') and hasattr(game.shop, 'show_items'):
-        response = game.shop.show_items()
-    else:
-        response = game.handle_command('shop')
-    await ctx.send(response)
-
-
-@bot.command(name='buy')
-async def buy(ctx: commands.Context, *, item_name: str | None = None):
-    game = get_game()
-    if not getattr(game, 'hero', None):
-        await ctx.send('Create a hero first with /randomhero.')
-        return
-    if not item_name:
-        await ctx.send('Specify an item to buy. Example: /buy iron sword')
-        return
-    normalized = item_name.strip().lower()
-    if hasattr(game, 'shop') and hasattr(game.shop, 'buy_item'):
-        response = game.shop.buy_item(game.hero, normalized)
-    else:
-        response = game.handle_command('buy', normalized)
-    await ctx.send(response)
-
-
-@bot.command(name='dungeon')
-async def dungeon(ctx: commands.Context):
-    game = get_game()
-    response = game.handle_command('dungeon')
-    await ctx.send(response)
-
-
-@bot.command(name='fight')
-async def fight(ctx: commands.Context):
-    game = get_game()
-    response = game.handle_command('fight')
-    await ctx.send(response)
-
-
-@bot.command(name='flee')
-async def flee(ctx: commands.Context):
-    game = get_game()
-    response = game.handle_command('flee')
-    await ctx.send(response)
-
-
-@bot.command(name='next')
-async def next_room(ctx: commands.Context):
-    game = get_game()
-    response = game.handle_command('next')
-    await ctx.send(response)
-
-
-@bot.command(name='search')
-async def search(ctx: commands.Context):
-    game = get_game()
-    response = game.handle_command('search')
-    await ctx.send(response)
-
-
-@bot.command(name='use')
-async def use(ctx: commands.Context, *, item_name: str | None = None):
-    game = get_game()
-    if not getattr(game, 'hero', None):
-        await ctx.send('Create a hero first with /randomhero.')
-        return
-    if not item_name:
-        await ctx.send('Specify an item to use. Example: /use healing potion')
-        return
-    normalized = item_name.strip().lower()
-    if hasattr(game.hero, 'use_item'):
-        response = game.hero.use_item(normalized)
-    else:
-        response = game.handle_command('use', normalized)
-    await ctx.send(response)
-
-
-@bot.command(name='achievement_i')
-async def achievement_i(ctx: commands.Context):
-    game = get_game()
-    await ctx.send(game.handle_command('/i'))
-
-
-@bot.command(name='achievement_ii')
-async def achievement_ii(ctx: commands.Context):
-    game = get_game()
-    await ctx.send(game.handle_command('/ii'))
-
-
-@bot.command(name='achievement_iii')
-async def achievement_iii(ctx: commands.Context):
-    game = get_game()
-    await ctx.send(game.handle_command('/iii'))
+async def run_game_command(interaction: discord.Interaction, command_name: str, *args: str):
+    try:
+        game = get_game()
+        response = game.handle_command(command_name, *args)
+        await safe_send(interaction, response)
+    except Exception as e:
+        logger.exception("Command failed: %s args=%s", command_name, args)
+        await safe_send(interaction, f"Error: {e}")
 
 
 @bot.event
-async def on_command_error(ctx: commands.Context, error: Exception):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    logger.exception('Discord bot error', exc_info=error)
-    await ctx.send(f'An error occurred: {error}')
+async def on_ready():
+    guild = discord.Object(id=GUILD_ID)
+    synced = await bot.tree.sync(guild=guild)
+
+    global command_mentions
+    command_mentions = {
+        cmd.name: f"</{cmd.name}:{cmd.id}>"
+        for cmd in synced
+    }
+
+    logger.info("Synced %s command(s) to guild %s", len(synced), GUILD_ID)
+    logger.info("Logged in as %s (%s)", bot.user, bot.user.id)
 
 
-if __name__ == '__main__':
-    if TOKEN == 'PUT_YOUR_DISCORD_BOT_TOKEN_HERE':
-        raise RuntimeError('Set DISCORD_BOT_TOKEN in your environment before running the bot.')
-    bot.run(TOKEN)
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    logger.exception("App command error", exc_info=error)
+    await safe_send(interaction, f"Command error: {error}")
+
+
+@bot.tree.command(name="start", description="Start the game")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def start_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "start")
+
+
+@bot.tree.command(name="help", description="Show the help menu")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def help_command(interaction: discord.Interaction):
+    await safe_send(interaction, build_plain_help())
+
+
+@bot.tree.command(name="randomhero", description="Create a random hero")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def randomhero_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "randomhero")
+
+
+@bot.tree.command(name="stats", description="Show hero stats")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def stats_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "stats")
+
+
+@bot.tree.command(name="dungeon", description="Enter the dungeon")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def dungeon_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "dungeon")
+
+
+@bot.tree.command(name="fight", description="Fight the monster")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def fight_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "fight")
+
+
+@bot.tree.command(name="flee", description="Try to escape")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def flee_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "flee")
+
+
+@bot.tree.command(name="next", description="Move to the next room")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def next_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "next")
+
+
+@bot.tree.command(name="search", description="Search the current room")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def search_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "search")
+
+
+@bot.tree.command(name="shop", description="Open the shop")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def shop_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "shop")
+
+
+BUY_ITEMS = [
+    "potion",
+    "ironsword",
+    "goldsword",
+    "crossbow",
+    "staff",
+    "bracers",
+    "armor",
+]
+
+USE_ITEMS = [
+    "potion",
+    "healing potion",
+    "stone",
+    "bone_amulet",
+    "ironsword",
+    "goldsword",
+    "crossbow",
+    "staff",
+    "bracers",
+    "armor",
+]
+
+
+async def buy_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=item, value=item)
+        for item in BUY_ITEMS
+        if current.lower() in item.lower()
+    ][:25]
+
+
+async def use_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=item, value=item)
+        for item in USE_ITEMS
+        if current.lower() in item.lower()
+    ][:25]
+
+
+@bot.tree.command(name="buy", description="Buy an item from the shop")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.describe(item="Item name")
+@app_commands.autocomplete(item=buy_autocomplete)
+async def buy_command(interaction: discord.Interaction, item: str):
+    await run_game_command(interaction, "buy", item)
+
+
+@bot.tree.command(name="use", description="Use an item")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.describe(item="Item name")
+@app_commands.autocomplete(item=use_autocomplete)
+async def use_command(interaction: discord.Interaction, item: str):
+    await run_game_command(interaction, "use", item)
+
+
+@bot.tree.command(name="achievement_i", description="Show achievement I")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def achievement_i_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "achievement_i")
+
+
+@bot.tree.command(name="achievement_ii", description="Show achievement II")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def achievement_ii_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "achievement_ii")
+
+
+@bot.tree.command(name="achievement_iii", description="Show achievement III")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def achievement_iii_command(interaction: discord.Interaction):
+    await run_game_command(interaction, "achievement_iii")
+
+
+bot.run(TOKEN)@app_commands.autocomplete(item=buy_autocomplete)
+async def buy_command(interaction: discord.Interaction, item: str):
+    game = get_game()
+    response = game.handle_command("buy", item.split())
+    await send_game_response(interaction, response)
+
+
+@bot.tree.command(name="use", description="Use an item from your inventory")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.describe(item="Item name")
+@app_commands.autocomplete(item=use_autocomplete)
+async def use_command(interaction: discord.Interaction, item: str):
+    game = get_game()
+    response = game.handle_command("use", item.split())
+    await send_game_response(interaction, response)
+
+
+@bot.tree.command(name="achievement_i", description="Show achievement I")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def achievement_i_command(interaction: discord.Interaction):
+    game = get_game()
+    response = game.handle_command("achievement_i", [])
+    await send_game_response(interaction, response)
+
+
+@bot.tree.command(name="achievement_ii", description="Show achievement II")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def achievement_ii_command(interaction: discord.Interaction):
+    game = get_game()
+    response = game.handle_command("achievement_ii", [])
+    await send_game_response(interaction, response)
+
+
+@bot.tree.command(name="achievement_iii", description="Show achievement III")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+async def achievement_iii_command(interaction: discord.Interaction):
+    game = get_game()
+    response = game.handle_command("achievement_iii", [])
+    await send_game_response(interaction, response)
+
+
+bot.run(TOKEN)
+
+
